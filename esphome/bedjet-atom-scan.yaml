@@ -1,0 +1,74 @@
+# BedJet Atom Lite — STAGE 1: base + BLE scanner firmware
+# Purpose: get the Atom Lite on your Wi-Fi and discover the BedJet 3's
+# real BLE MAC address (nothing on file records it — the M4 watcher finds
+# the BedJet by advertised name, and iOS hides real BLE MACs).
+#
+# Flash this first, place the Atom within Bluetooth range of the bed,
+# and read the logs: esp32_ble_tracker prints every BLE device it sees.
+# Look for the device advertising as BEDJET_V3 and note its MAC, then
+# put that MAC in bedjet-atom.yaml (stage 2) and re-flash / OTA.
+#
+# Wi-Fi: no credentials in this file. The fallback AP + captive portal
+# (and ESPHome improv over USB/BLE) let you enter the home SSID and
+# password at install time; they are stored on the device only.
+
+esphome:
+  name: bedjet-atom
+  friendly_name: BedJet Atom
+
+esp32:
+  board: m5stack-atom
+  framework:
+    type: esp-idf
+
+logger:
+  level: DEBUG   # needed in stage 1 so BLE scan results show in logs
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "BedJet Atom Fallback"
+    password: !secret fallback_ap_password
+
+captive_portal:
+
+improv_serial:
+
+esp32_improv:
+  authorizer: none
+
+# Atom Lite onboard RGB LED (GPIO27) as a simple status light
+light:
+  - platform: esp32_rmt_led_strip
+    chipset: SK6812
+    pin: GPIO27
+    num_leds: 1
+    rgb_order: GRB
+    name: "Atom Status LED"
+    id: atom_led
+    restore_mode: ALWAYS_OFF
+
+# Stage 1 only: scan and log nearby BLE devices. No connection is made,
+# so this does NOT take over the BedJet from the M4 watcher or the app.
+# 1b (Nov 23, 2026): the tracker alone logs NOTHING — with no listener it
+# silently discards advertisements (proven by the stage 1 run: flash OK,
+# Wi-Fi up, zero devices in scan-log.txt). The on_ble_advertise trigger
+# below is what actually prints each advertiser's address/RSSI/name.
+esp32_ble_tracker:
+  scan_parameters:
+    interval: 1100ms
+    window: 1100ms
+    active: true
+  on_ble_advertise:
+    then:
+      - lambda: |-
+          ESP_LOGI("ble_scan", "addr %s rssi %d name '%s'", x.address_str().c_str(), x.get_rssi(), x.get_name().c_str());

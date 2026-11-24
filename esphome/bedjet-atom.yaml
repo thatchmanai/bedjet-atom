@@ -1,0 +1,168 @@
+# BedJet Atom Lite — bedjet-atom.yaml (Atom build kit edition)
+# NOTE: the BedJet BLE mac_address below is a PLACEHOLDER (XX:XX:...) —
+# replace it with the MAC you learn in stage 1 before compiling.
+# This is the full Atom firmware config, scrubbed for publication:
+# BLE MAC is a placeholder and all credentials are !secret
+# references. See README.md in this kit.
+# Original heading: STAGE 2: BedJet control firmware (ESPHome `bedjet`)
+# Prerequisite: stage 1 (bedjet-atom-scan.yaml) has run near the bed and
+# the BedJet 3's BLE MAC address is known. Replace the XX:XX placeholder
+# below with that MAC before compiling — do not flash with the placeholder.
+#
+# What this gives: the Atom holds the BedJet's single BLE connection and
+# exposes climate + fan + temperature sensors via the native ESPHome
+# API (a Home Assistant integration can consume them; that is not
+# part of this kit). Modes: off / heat / fan-only (the BedJet's
+# "cooling") / dry, plus the BOOST (turbo) preset, target temp, fan
+# speed — per the ESPHome bedjet component (V3 only; the reference unit is a
+# BedJet 3, firmware V1.20).
+#
+# CUTOVER RULE: the BedJet accepts ONE Bluetooth connection. Before this
+# firmware takes over, stop the M4 BedJetWatcher/poller and fully close
+# the BedJet iOS app. The "Enable BedJet Connection" switch below can
+# release the BLE connection again (e.g. to use the phone app) without
+# unplugging the Atom. The RF remote always works.
+#
+# Secrets (wifi, API key, OTA, fallback AP) live in secrets.yaml on the
+# flashing machine only — never commit real values.
+
+esphome:
+  name: bedjet-atom
+  friendly_name: BedJet Atom
+
+esp32:
+  board: m5stack-atom
+  framework:
+    type: esp-idf
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+  # This build is used through its web page, not by a native API
+  # client (a Home Assistant add is optional and separate). With
+  # no API client expected, disable ESPHome's API reboot timeout
+  # so the Atom never reboots itself just because nothing has
+  # connected to the API.
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Added Nov 23, 2026 (stage 2.1): the first read-back test hit a
+  # transient "No route to host" minutes after boot and ping latency
+  # ran 100-390 ms — classic ESP32 Wi-Fi modem sleep. NONE keeps the
+  # radio awake; the Atom is mains-powered, so the cost is free.
+  power_save_mode: none
+  ap:
+    ssid: "BedJet Atom Fallback"
+    password: !secret fallback_ap_password
+
+captive_portal:
+
+# Added Nov 23, 2026 (stage 2.1): the Atom serves its own control page —
+# open http://bedjet-atom.local (or http://<atom-ip>) in a phone
+# browser on the home Wi-Fi for mode/temp/fan controls. No Mac, no
+# cloud, no Home Assistant needed. LAN-only trust: no login is
+# enabled on the web server — see README.md, "Limits and
+# warnings," for exactly what that trust boundary does and does
+# not cover.
+web_server:
+  port: 80
+  # Stage 2.2 (Nov 23, 2026): iPhone-app dressing — js injects the
+  # Add-to-Home-Screen metas + a drawn touch icon; css adds the
+  # system font and notch safe areas. Files live beside this YAML.
+  # Stage 2.3 (Nov 24, 2026): the js also rewrites temperature
+  # readouts on the rendered page from °C to °F (display only) —
+  # the bedjet climate platform is °C-native with no unit option,
+  # and the owner works in °F. Hard-set °F, no toggle.
+  # Stage 2.3.1 (Nov 24, 2026): the web UI's climate cell renders
+  # "Current: N, Target: N" as bare numbers with no unit text, so
+  # 2.3's "N °C" matching never fired there; the js now also finds
+  # that cell and converts its bare numbers (with a per-node memory
+  # so the page's own refreshes don't double-convert).
+  # Stage 2.3.2 (Nov 24, 2026): the js adds a Refresh pill button
+  # (bottom-right) and a pull-down-from-top reload gesture — the
+  # home-screen app has no Safari chrome, hence no reload at all,
+  # and a page left open across an Atom reboot goes stale.
+  # Stage 2.3.3 (Nov 24, 2026): the climate-cell search widens to
+  # the whole table cell — 2.3.1 converted Current/Target and the
+  # sensor rows but missed the target slider's min/max labels
+  # (19 / 43), which sat outside the container it searched
+  # (spotted in a screenshot of the 2.3.1 page).
+  # Stage 3.0 (Nov 24, 2026): the js/css now REPLACE the stock page
+  # with a custom minimalist Liquid Glass UI (the stock
+  # page is "very ugly") — giant °F set-temp, Off/Heat/Cool/Turbo
+  # pill, stat cards, everything else in an Advanced Settings
+  # sheet — driven by the /events stream + web REST API. °F is
+  # native in the UI; the wire stays °C. Stock page survives at
+  # /?stock=1. Last stock-dressing build: bedjet-app-2.3-final.*.
+  # Stage 3.0.1 (Nov 24, 2026): (a) in ?stock mode the js adds a
+  # floating "‹ BedJet App" pill — the home-screen app has no
+  # address bar, so the stock page was a dead end;
+  # (b) control POSTs now send an explicit empty body — the web
+  # server rejects bodyless POSTs with 411 Length Required
+  # (found by the curl api-probe; presets retest pending probe 2).
+  # Stage 3.0.2 (Nov 24, 2026): the stat label "Outlet" became
+  # "Unit" — the outlet sensor measures the air
+  # leaving the unit toward the bed; "Unit" reads better next to
+  # "Room" than the plumbing word "Outlet" does.
+  css_include: bedjet-app.css
+  js_include: bedjet-app.js
+
+light:
+  - platform: esp32_rmt_led_strip
+    chipset: SK6812
+    pin: GPIO27
+    num_leds: 1
+    rgb_order: GRB
+    name: "Atom Status LED"
+    id: atom_led
+    restore_mode: ALWAYS_OFF
+
+esp32_ble_tracker:
+  scan_parameters:
+    active: true
+
+ble_client:
+  # BedJet MAC learned in stage 1b, Nov 23, 2026: BEDJET_V3 at
+  # XX:XX:XX:XX:XX:XX, found by the stage 1 scan — replace the placeholder below with yours.
+  - mac_address: XX:XX:XX:XX:XX:XX
+    id: bedjet_ble
+
+bedjet:
+  - id: bedjet_hub
+    ble_client_id: bedjet_ble
+
+climate:
+  - platform: bedjet
+    id: bedjet_climate
+    name: "BedJet"
+    bedjet_id: bedjet_hub
+
+fan:
+  - platform: bedjet
+    id: bedjet_fan
+    name: "BedJet Fan"
+    bedjet_id: bedjet_hub
+
+sensor:
+  - platform: bedjet
+    bedjet_id: bedjet_hub
+    outlet_temperature:
+      name: "BedJet Outlet Temperature"
+    ambient_temperature:
+      name: "BedJet Ambient Temperature"
+
+# Lets the owner hand the BLE connection back to the phone app on demand.
+switch:
+  - platform: ble_client
+    ble_client_id: bedjet_ble
+    name: "Enable BedJet Connection"
+    icon: "mdi:bluetooth-connected"
+    entity_category: config
